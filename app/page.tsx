@@ -224,7 +224,12 @@ export default function Home() {
     ),
     [calculatedRoutes, setCalculatedRoutes] =
       useState<CalculatedRouteMetrics | null>(null),
+    [routingStatus, setRoutingStatus] = useState("Loading Google Maps…"),
+    [routeRequestId, setRouteRequestId] = useState(0),
     [crowdRefresh, setCrowdRefresh] = useState(0);
+  const routingIsActive = /loading|finding|locating|calculating|starting/i.test(
+    routingStatus,
+  );
   const metricForRoute = (id: string): CalculatedRouteMetric | undefined =>
     id === "a"
       ? calculatedRoutes?.lowCrowd
@@ -246,7 +251,7 @@ export default function Home() {
         eta:
           baseRoute.id === "a" && calculatedRoutes?.lowCrowdPending
             ? "Calculating…"
-            : calculatedRoutes
+            : calculatedRoutes || !routingIsActive
               ? "Unavailable"
               : "Calculating…",
         distance: "—",
@@ -372,6 +377,8 @@ export default function Home() {
       return;
     }
     setCalculatedRoutes(null);
+    setRoutingStatus("Starting route request…");
+    setRouteRequestId((current) => current + 1);
     setJourney({ origin, destination });
     setNotice(`Live route requested for ${origin} to ${destination}.`);
     document.querySelector("#options")?.scrollIntoView({ behavior: "smooth" });
@@ -633,9 +640,16 @@ export default function Home() {
             <GoogleRouteMap
               origin={journey.origin}
               destination={journey.destination}
+              requestId={routeRequestId}
               selectedRouteId={routeId}
               crowdData={crowdData}
-              onRoutesCalculated={setCalculatedRoutes}
+              onRoutingStatus={setRoutingStatus}
+              onRoutesCalculated={(metrics) =>
+                setCalculatedRoutes((current) => ({
+                  ...(current ?? {}),
+                  ...metrics,
+                }))
+              }
             />
           </section>
           <aside className="panel stack" id="options">
@@ -676,7 +690,7 @@ export default function Home() {
                       ? `≈${metricForRoute(r.id)!.estimatedMinutes} min`
                       : r.id === "a" && calculatedRoutes?.lowCrowdPending
                         ? "Calculating…"
-                      : calculatedRoutes
+                      : calculatedRoutes || !routingIsActive
                           ? "Unavailable"
                           : "Calculating…"}
                   </strong>
@@ -709,6 +723,15 @@ export default function Home() {
                   <span className="route-action">View this route</span>
                 </motion.button>
               ))}
+            </div>
+            <div className="routing-debug" role="status" aria-live="polite">
+              <strong>Routing diagnostic</strong>
+              <span>{routingStatus}</span>
+              <small>
+                Requests: Google walking alternatives plus CityFlow low-crowd
+                and shortest routes. The current API does not accept the
+                selected preference buttons as request parameters.
+              </small>
             </div>
           </aside>
         </motion.section>
@@ -753,21 +776,33 @@ export default function Home() {
                   exit={{ opacity: 0, height: 0 }}
                   className="reroute-alert"
                 >
-                  <p className="step-label">Calm reroute available</p>
-                  <h3>The next section is busier than usual.</h3>
-                  <p>
-                    A quieter alternative adds 3 min and passes through an open
-                    area.
+                  <p className="step-label">
+                    {routeId === "a" ? "Calmer route active" : "Calm reroute available"}
                   </p>
-                  <button
-                    className="secondary-action"
-                    onClick={() => {
-                      select("b");
-                      setNotice("Switched to the calmer live-data option.");
-                    }}
-                  >
-                    Switch to calmer route
-                  </button>
+                  <h3>
+                    {routeId === "a"
+                      ? "You are on the calmer route."
+                      : "The next section is busier than usual."}
+                  </h3>
+                  <p>
+                    {routeId === "a"
+                      ? "Continue following the recommended low-sensory route."
+                      : "Switch back to the recommended low-sensory route."}
+                  </p>
+                  {routeId !== "a" && (
+                    <button
+                      className="secondary-action"
+                      onClick={() => {
+                        select("a");
+                        setNotice("Switched to the recommended calmer Route A.");
+                        document
+                          .querySelector(".map-panel")
+                          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                      }}
+                    >
+                      Switch to calmer route
+                    </button>
+                  )}
                 </motion.div>
               )}
             </AnimatePresence>

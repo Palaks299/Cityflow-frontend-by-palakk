@@ -237,6 +237,15 @@ async function readBackendResponse<T>(response: Response): Promise<T> {
   return body as T;
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]);
+}
+
 async function resolveCoordinate(
   value: string,
   googleMaps: GoogleMaps,
@@ -302,14 +311,18 @@ export function loadGoogleMaps() {
 export default function GoogleRouteMap({
   origin,
   destination,
+  requestId = 0,
   selectedRouteId = "a",
   onRoutesCalculated,
+  onRoutingStatus,
   crowdData = EMPTY_CROWD_DATA,
 }: {
   origin: string;
   destination: string;
+  requestId?: number;
   selectedRouteId?: "a" | "b" | "c";
   onRoutesCalculated?: (metrics: CalculatedRouteMetrics) => void;
+  onRoutingStatus?: (status: string) => void;
   crowdData?: CrowdDensityPoint[];
 }) {
   const reduceMotion = useReducedMotion();
@@ -317,6 +330,7 @@ export default function GoogleRouteMap({
     map = useRef<MapInstance | null>(null),
     lines = useRef<RouteLine[]>([]),
     routeMetricsHandler = useRef(onRoutesCalculated),
+    routingStatusHandler = useRef(onRoutingStatus),
     watchId = useRef<number | null>(null),
     positionMarker = useRef<PositionMarker | null>(null),
     layerCircles = useRef<CircleInstance[]>([]),
@@ -340,6 +354,12 @@ export default function GoogleRouteMap({
   useEffect(() => {
     routeMetricsHandler.current = onRoutesCalculated;
   }, [onRoutesCalculated]);
+  useEffect(() => {
+    routingStatusHandler.current = onRoutingStatus;
+  }, [onRoutingStatus]);
+  useEffect(() => {
+    routingStatusHandler.current?.(status);
+  }, [status]);
   useEffect(() => {
     if (!key || !container.current) return;
     let cancelled = false;
@@ -386,78 +406,30 @@ export default function GoogleRouteMap({
               "Add NEXT_PUBLIC_API_URL to connect low-crowd routing.",
             );
 
-          setStatus("Finding nearest walking network nodes…");
-          const nearestNodeUrl = (point: Coordinate) => {
-            const url = new URL(`${apiBaseUrl}/api/network/nearest-node`);
-            url.searchParams.set("lat", String(point.lat));
-            url.searchParams.set("lon", String(point.lng));
-            return url;
-          };
-          const nearestRequest = (point: Coordinate) =>
-            fetch(nearestNodeUrl(point), {
-              signal: AbortSignal.timeout(12_000),
-              headers: {
-                Accept: "application/json",
-                "ngrok-skip-browser-warning": "true",
-              },
-            });
-          const [startResponse, endResponse] = await Promise.all([
-            nearestRequest(startCoordinate),
-            nearestRequest(endCoordinate),
-          ]);
-          const [startNode, endNode] = await Promise.all([
-            readBackendResponse<NearestNodeResponse>(startResponse),
-            readBackendResponse<NearestNodeResponse>(endResponse),
-          ]);
-          if (!startNode.within_threshold)
-            throw new Error(
-              `The start is ${Math.round(startNode.distance_m)} m from the walking network, outside the ${startNode.threshold_m} m limit.`,
-            );
-          if (!endNode.within_threshold)
-            throw new Error(
-              `The destination is ${Math.round(endNode.distance_m)} m from the walking network, outside the ${endNode.threshold_m} m limit.`,
-            );
-
-          setStatus("Calculating shortest and low-crowd routes…");
-          const requestBackendRoute = async (endpoint: string) => {
-            const response = await fetch(`${apiBaseUrl}${endpoint}`, {
-              method: "POST",
-              signal: AbortSignal.timeout(75_000),
-              headers: {
-                Accept: "application/json",
-                "Content-Type": "application/json",
-                "ngrok-skip-browser-warning": "true",
-              },
-              body: JSON.stringify({
-                start_node: startNode.node_id,
-                end_node: endNode.node_id,
-              }),
-            });
-            return readBackendResponse<LowCrowdRouteResponse>(response);
-          };
-          const backendResults = Promise.allSettled([
-            requestBackendRoute("/api/routes/low-crowd"),
-            requestBackendRoute("/api/routes"),
-          ]);
+          // Resolve standard Google walking choices first. They must remain
+          // available even when the CityFlow backend is slow or offline.
           let googleRoutes: RouteResult[] = [];
           try {
             const { Route } = (await googleMaps.importLibrary(
               "routes",
             )) as RoutesLibrary;
-            const alternatives = await Route.computeRoutes({
-              origin: startCoordinate,
-              destination: endCoordinate,
-              travelMode: "WALKING",
-              computeAlternativeRoutes: true,
-              fields: ["path", "distanceMeters", "durationMillis"],
-            });
+            const alternatives = await withTimeout(
+              Route.computeRoutes({
+                origin: startCoordinate,
+                destination: endCoordinate,
+                travelMode: "WALKING",
+                computeAlternativeRoutes: true,
+                fields: ["path", "distanceMeters", "durationMillis"],
+              }),
+              15_000,
+              "Google walking routes timed out.",
+            );
             googleRoutes =
               alternatives.routes?.filter((route) => route.path?.length) ?? [];
           } catch {
             googleRoutes = [];
           }
           const googleShortest = googleRoutes[0];
-          // Do not present Google's primary route twice when no alternative exists.
           const alternativeRoute = googleRoutes[1];
           const googleMetric = (
             route: RouteResult | undefined,
@@ -523,6 +495,60 @@ export default function GoogleRouteMap({
             map.current.fitBounds(preliminaryBounds);
             setStatus("Standard routes ready; calculating low-crowd route…");
           }
+
+          setStatus("Finding nearest walking network nodes…");
+          const nearestNodeUrl = (point: Coordinate) => {
+            const url = new URL(`${apiBaseUrl}/api/network/nearest-node`);
+            url.searchParams.set("lat", String(point.lat));
+            url.searchParams.set("lon", String(point.lng));
+            return url;
+          };
+          const nearestRequest = (point: Coordinate) =>
+            fetch(nearestNodeUrl(point), {
+              signal: AbortSignal.timeout(12_000),
+              headers: {
+                Accept: "application/json",
+                "ngrok-skip-browser-warning": "true",
+              },
+            });
+          const [startResponse, endResponse] = await Promise.all([
+            nearestRequest(startCoordinate),
+            nearestRequest(endCoordinate),
+          ]);
+          const [startNode, endNode] = await Promise.all([
+            readBackendResponse<NearestNodeResponse>(startResponse),
+            readBackendResponse<NearestNodeResponse>(endResponse),
+          ]);
+          if (!startNode.within_threshold)
+            throw new Error(
+              `The start is ${Math.round(startNode.distance_m)} m from the walking network, outside the ${startNode.threshold_m} m limit.`,
+            );
+          if (!endNode.within_threshold)
+            throw new Error(
+              `The destination is ${Math.round(endNode.distance_m)} m from the walking network, outside the ${endNode.threshold_m} m limit.`,
+            );
+
+          setStatus("Calculating shortest and low-crowd routes…");
+          const requestBackendRoute = async (endpoint: string) => {
+            const response = await fetch(`${apiBaseUrl}${endpoint}`, {
+              method: "POST",
+              signal: AbortSignal.timeout(75_000),
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/json",
+                "ngrok-skip-browser-warning": "true",
+              },
+              body: JSON.stringify({
+                start_node: startNode.node_id,
+                end_node: endNode.node_id,
+              }),
+            });
+            return readBackendResponse<LowCrowdRouteResponse>(response);
+          };
+          const backendResults = Promise.allSettled([
+            requestBackendRoute("/api/routes/low-crowd"),
+            requestBackendRoute("/api/routes"),
+          ]);
           const [lowCrowdResult, shortestResult] = await backendResults;
           lines.current.forEach(({ line }) => line.setMap(null));
           lines.current = [];
@@ -692,19 +718,23 @@ export default function GoogleRouteMap({
         }
         lines.current.forEach(({ line }) => line.setMap(null));
         lines.current = [];
-        const response = await Route.computeRoutes({
-          origin,
-          destination,
-          travelMode: "WALKING",
-          computeAlternativeRoutes: true,
-          fields: [
-            "path",
-            "distanceMeters",
-            "durationMillis",
-            "legs.steps.instructions",
-            "legs.steps.distanceMeters",
-          ],
-        });
+        const response = await withTimeout(
+          Route.computeRoutes({
+            origin,
+            destination,
+            travelMode: "WALKING",
+            computeAlternativeRoutes: true,
+            fields: [
+              "path",
+              "distanceMeters",
+              "durationMillis",
+              "legs.steps.instructions",
+              "legs.steps.distanceMeters",
+            ],
+          }),
+          15_000,
+          "Google walking routes timed out.",
+        );
         if (cancelled || !map.current) return;
         const found =
           response.routes?.filter((route) => route.path?.length) ?? [];
@@ -736,6 +766,10 @@ export default function GoogleRouteMap({
             `${firstStep.instructions}${firstStep.distanceMeters ? ` · ${firstStep.distanceMeters} m` : ""}`,
           );
       } catch (error) {
+        if (cancelled) return;
+        // End the parent loading state even when CityFlow is unavailable.
+        // Any Google metrics already published are preserved by the parent.
+        routeMetricsHandler.current?.({ lowCrowdPending: false });
         setStatus(
           error instanceof Error
             ? error.message
@@ -747,7 +781,7 @@ export default function GoogleRouteMap({
     return () => {
       cancelled = true;
     };
-  }, [origin, destination]);
+  }, [origin, destination, requestId]);
   useEffect(() => {
     sensoryRouteRef.current = sensoryRoute;
     selectedRouteRef.current = selectedRouteId;

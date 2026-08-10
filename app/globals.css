@@ -291,3 +291,15 @@ body{background:linear-gradient(145deg,#f8fcfc 0%,#e8f3f3 48%,#f2f8f8 100%)}
   }
   .hero-nav a{font-size:.82rem}
 }
+.routing-debug{
+  display:grid;
+  gap:5px;
+  padding:12px 14px;
+  color:var(--text);
+  background:var(--soft);
+  border:1px solid var(--line);
+  border-radius:10px;
+}
+.routing-debug strong{color:var(--ink);font-size:.78rem}
+.routing-debug span{color:var(--sage-dark);font-size:.76rem;font-weight:750}
+.routing-debug small{color:var(--muted);font-size:.65rem;line-height:1.45}
