@@ -276,9 +276,15 @@ export type CalculatedRouteMetric = {
   distanceMeters: number;
   estimatedMinutes: number;
 };
+export type RouteCrowdData = {
+  score?: number;
+  coverageRatio?: number;
+  status?: string;
+};
 export type CalculatedRouteMetrics = {
   lowCrowd?: CalculatedRouteMetric;
   lowCrowdPending?: boolean;
+  lowCrowdData?: RouteCrowdData;
   alternative?: CalculatedRouteMetric;
   shortest?: CalculatedRouteMetric;
 };
@@ -688,6 +694,13 @@ export default function GoogleRouteMap({
           routeMetricsHandler.current?.({
             lowCrowd: metricFor(lowCrowdRoute, lowCrowdPath),
             lowCrowdPending: false,
+            lowCrowdData: lowCrowdRoute
+              ? {
+                  score: lowCrowdRoute.crowd_score,
+                  coverageRatio: lowCrowdRoute.crowd_coverage_ratio,
+                  status: lowCrowdRoute.crowd_data_status,
+                }
+              : undefined,
             alternative: alternativeComparison
               ? alternativeComparison.metric ??
                 metricFor(null, alternativeComparison.path)

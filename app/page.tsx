@@ -124,11 +124,7 @@ const routes = [
     ],
   },
 ] as const;
-const prefs = [
-  "Avoid crowds",
-  "Avoid construction",
-  "Simpler crossings",
-];
+const prefs = ["Avoid crowds"];
 const quietBreakPlaces = [
   {
     id: "flagstaff",
@@ -233,16 +229,18 @@ export default function Home() {
     [routeOptionsPanelHeight, setRouteOptionsPanelHeight] = useState<
       number | null
     >(null),
-    [selectedPrefs, setPrefs] = useState<string[]>(prefs.slice(0, 2)),
-    [from, setFrom] = useState("RMIT University, Melbourne"),
-    [to, setTo] = useState("State Library Victoria, Melbourne"),
-    [journey, setJourney] = useState({
-      origin: "RMIT University, Melbourne",
-      destination: "State Library Victoria, Melbourne",
-    }),
+    [selectedPrefs, setPrefs] = useState<string[]>(prefs),
+    [from, setFrom] = useState(""),
+    [to, setTo] = useState(""),
+    [journey, setJourney] = useState<{
+      origin: string;
+      destination: string;
+    } | null>(null),
     [notice, setNotice] = useState(""),
     [crowdData, setCrowdData] = useState<CrowdDensityPoint[]>([]),
     [crowdStatus, setCrowdStatus] = useState("Loading crowd conditions…"),
+    [crowdGeneratedAt, setCrowdGeneratedAt] = useState<string | null>(null),
+    [sensorTotal, setSensorTotal] = useState(0),
     [dataQualityStatus, setDataQualityStatus] = useState(
       "Checking sensor freshness…",
     ),
@@ -282,7 +280,13 @@ export default function Home() {
       };
   const busy = crowdData.some((point) => point.level === "high");
   const quietPlaceDetail = (place: (typeof quietBreakPlaces)[number]) => {
-    if (!crowdData.length) return `${place.amenity} · ${crowdStatus}`;
+    if (!crowdData.length)
+      return {
+        amenity: place.amenity,
+        crowd: "Unavailable",
+        proximity: null,
+        isFresh: false,
+      };
     const nearest = crowdData.reduce((closest, sensor) =>
       distanceBetween(place, sensor) < distanceBetween(place, closest)
         ? sensor
@@ -293,15 +297,62 @@ export default function Home() {
       nearest.level === "moderate"
         ? "Moderate"
         : `${nearest.level[0].toUpperCase()}${nearest.level.slice(1)}`;
-    const freshness =
-      nearest.dataStatus === "fresh"
-        ? "Fresh reading"
-        : nearest.dataStatus === "stale"
-          ? "Stale reading"
-          : "No live reading";
-    return `${place.amenity} · ${level} crowd · ${freshness} · nearest sensor ${sensorDistance} m away${nearest.updatedAt ? ` · observed ${nearest.updatedAt}` : ""}`;
+    return {
+      amenity: place.amenity,
+      crowd: `${level} crowd`,
+      proximity: `${sensorDistance} m from nearest reading`,
+      isFresh: nearest.dataStatus === "fresh",
+    };
   };
+  const highCrowdCount = crowdData.filter(
+    (point) => point.level === "high",
+  ).length;
+  const moderateCrowdCount = crowdData.filter(
+    (point) => point.level === "moderate",
+  ).length;
+  const lowCrowdCount = crowdData.filter((point) => point.level === "low").length;
+  const freshnessCounts = dataQualityStatus.match(
+    /(\d+) fresh · (\d+) stale · (\d+) no data/,
+  );
+  const freshCount = Number(freshnessCounts?.[1] ?? 0);
+  const staleCount = Number(freshnessCounts?.[2] ?? 0);
+  const noDataCount = Number(freshnessCounts?.[3] ?? 0);
+  const simplifiedDataStatus = freshnessCounts
+    ? freshCount === 0 && (staleCount > 0 || noDataCount > 0)
+      ? "Limited"
+      : staleCount + noDataCount > freshCount
+        ? "Mixed"
+        : "Current"
+    : "Unavailable";
+  const simplifiedDataMessage = freshnessCounts
+    ? simplifiedDataStatus === "Limited"
+      ? "Some sensor readings may be outdated"
+      : simplifiedDataStatus === "Mixed"
+        ? "Fresh and older readings are available"
+        : "Most sensor readings are current"
+    : dataQualityStatus;
+  const quietDataNeedsCaution =
+    !crowdData.length || crowdData.some((point) => point.dataStatus !== "fresh");
+  const routeCrowdData = calculatedRoutes?.lowCrowdData;
+  const routeCoveragePercent =
+    typeof routeCrowdData?.coverageRatio === "number"
+      ? Math.round(
+          routeCrowdData.coverageRatio <= 1
+            ? routeCrowdData.coverageRatio * 100
+            : routeCrowdData.coverageRatio,
+        )
+      : null;
+  const confidenceHeadline = routeCrowdData?.status
+    ? routeCrowdData.status.replaceAll("_", " ")
+    : sensorTotal
+      ? `${crowdData.length} of ${sensorTotal} sensors reporting`
+      : "Unavailable";
+  const confidenceDetail =
+    routeCoveragePercent !== null
+      ? `${routeCoveragePercent}% crowd-data coverage on Route A`
+      : notice || crowdStatus;
   useEffect(() => {
+    if (!journey) return;
     const controller = new AbortController();
     async function loadCrowdConditions() {
       setCrowdStatus("Loading crowd conditions…");
@@ -351,6 +402,15 @@ export default function Home() {
                 })
               : undefined,
           })) satisfies CrowdDensityPoint[];
+        setSensorTotal((payload.conditions ?? []).length);
+        setCrowdGeneratedAt(
+          payload.generated_at
+            ? new Date(payload.generated_at).toLocaleString("en-AU", {
+                dateStyle: "medium",
+                timeStyle: "short",
+              })
+            : null,
+        );
         setCrowdData(points);
         setCrowdStatus(
           points.length
@@ -373,6 +433,8 @@ export default function Home() {
       } catch (error) {
         if (controller.signal.aborted) return;
         setCrowdData([]);
+        setSensorTotal(0);
+        setCrowdGeneratedAt(null);
         setCrowdStatus(
           error instanceof Error
             ? error.message
@@ -383,7 +445,7 @@ export default function Home() {
     }
     void loadCrowdConditions();
     return () => controller.abort();
-  }, [crowdRefresh]);
+  }, [crowdRefresh, journey]);
   const select = (id: (typeof routes)[number]["id"]) => {
     setRouteId(id);
     setNotice("");
@@ -405,7 +467,9 @@ export default function Home() {
     setRouteRequestId((current) => current + 1);
     setJourney({ origin, destination });
     setNotice(`Live route requested for ${origin} to ${destination}.`);
-    document.querySelector("#options")?.scrollIntoView({ behavior: "smooth" });
+    window.requestAnimationFrame(() =>
+      document.querySelector("#options")?.scrollIntoView({ behavior: "smooth" }),
+    );
   };
   const reveal = reduceMotion
     ? {}
@@ -619,32 +683,41 @@ export default function Home() {
               <Heading
                 over="Google Maps · Walking"
                 title={
-                  route.id === "a"
+                  !journey
+                    ? "Plan a route to begin"
+                    : route.id === "a"
                     ? "Recommended low-sensory route"
                     : `Selected ${route.label.toLowerCase()} route`
                 }
               />
-              <span className="route-badge">{route.name}</span>
+              {journey && <span className="route-badge">{route.name}</span>}
             </div>
-            <GoogleRouteMap
-              origin={journey.origin}
-              destination={journey.destination}
-              requestId={routeRequestId}
-              selectedRouteId={routeId}
-              crowdData={crowdData}
-              onRoutingStatus={setRoutingStatus}
-              onRoutesCalculated={(metrics) =>
-                setCalculatedRoutes((current) => ({
-                  ...(current ?? {}),
-                  ...metrics,
-                }))
-              }
-            />
+            {journey ? (
+              <GoogleRouteMap
+                origin={journey.origin}
+                destination={journey.destination}
+                requestId={routeRequestId}
+                selectedRouteId={routeId}
+                crowdData={crowdData}
+                onRoutingStatus={setRoutingStatus}
+                onRoutesCalculated={(metrics) =>
+                  setCalculatedRoutes((current) => ({
+                    ...(current ?? {}),
+                    ...metrics,
+                  }))
+                }
+              />
+            ) : (
+              <div className="feature-empty-state">
+                Select a start and destination in the planner to view the map.
+              </div>
+            )}
           </section>
           <aside
             ref={routeOptionsPanelRef}
             className="panel stack"
             id="options"
+            data-empty={!journey}
             style={
               routeOptionsPanelHeight
                 ? { height: `${routeOptionsPanelHeight}px` }
@@ -807,62 +880,214 @@ export default function Home() {
           </aside>
         </motion.section>
         <motion.section {...reveal} className="details-grid details-grid-compact" id="details">
-          <article className="panel" id="navigation">
-            <Heading over="Navigation in progress" title={route.nav[0]} />
-            <div className="navigation-card">
-              <p className="step-label">Next step</p>
-              <h3>{route.nav[1]}</h3>
-              <p>{route.nav[2]}</p>
-              <div className="progress-row">
-                <span>
-                  <strong>{route.eta}</strong> remaining
+          <article className="panel" id="navigation" data-empty={!journey}>
+            <div className="navigation-panel-header">
+              <div>
+                <Heading
+                  over="Navigation in progress"
+                  title={journey ? route.nav[0] : "Route guidance"}
+                />
+                <span className="navigation-sensory-badge">
+                  <span aria-hidden="true">◆</span> {route.label} route
                 </span>
-                <span>
-                  <strong>{route.distance}</strong> remaining
+              </div>
+              <div className="navigation-reassurance">
+                <span className="navigation-mini-icon" aria-hidden="true">⌁</span>
+                <strong>
+                  {routeId === "a"
+                    ? "You're on the calmer route"
+                    : routeId === "b"
+                      ? "You're following the alternative route"
+                      : "You're following the faster route"}
+                </strong>
+              </div>
+            </div>
+            <div className="navigation-next-card">
+              <span className="navigation-direction-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M5 19 19 5M10 5h9v9" /></svg>
+              </span>
+              <div className="navigation-next-copy">
+                <p className="step-label">Next step</p>
+                <h3>{route.nav[1]}</h3>
+                <p>{route.nav[2]}</p>
+              </div>
+              <div className="navigation-progress-bar">
+                <span className="navigation-progress-item">
+                  <ClockIcon />
+                  <span><strong>{route.eta}</strong><small>remaining</small></span>
+                </span>
+                <span className="navigation-progress-item">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+                  <span><strong>{route.distance}</strong><small>remaining</small></span>
                 </span>
               </div>
             </div>
-            <AnimatePresence>
-              {busy && (
-                <motion.div
-                  initial={reduceMotion ? false : { opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: "auto" }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="reroute-alert"
-                >
-                  <p className="step-label">
-                    {routeId === "a" ? "Calmer route active" : "Calm reroute available"}
-                  </p>
-                  <h3>
-                    {routeId === "a"
-                      ? "You are on the calmer route."
-                      : "The next section is busier than usual."}
-                  </h3>
-                  <p>
-                    {routeId === "a"
-                      ? "Continue following the recommended low-sensory route."
-                      : "Switch back to the recommended low-sensory route."}
-                  </p>
-                  {routeId !== "a" && (
-                    <button
-                      className="secondary-action"
-                      onClick={() => {
-                        select("a");
-                        setNotice("Switched to the recommended calmer Route A.");
-                        document
-                          .querySelector(".map-panel")
-                          ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                      }}
-                    >
-                      Switch to calmer route
-                    </button>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            <motion.div
+              initial={reduceMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: reduceMotion ? 0 : 0.2 }}
+              className="navigation-route-status"
+              data-route={routeId}
+            >
+              <span className="navigation-heart-icon" aria-hidden="true">♡</span>
+              <div>
+                <p className="step-label">
+                  {routeId === "a"
+                    ? "Calmer route active"
+                    : routeId === "b"
+                      ? "Alternative route active"
+                      : "Fastest route active"}
+                </p>
+                <h3>
+                  {routeId === "a"
+                    ? "You are on the calmer route."
+                    : routeId === "b"
+                      ? "You are following the alternative route."
+                      : "You are following the faster but busier route."}
+                </h3>
+                <p>
+                  {routeId === "a"
+                    ? "Continue following the recommended low-sensory route."
+                    : route.summary}
+                </p>
+                {busy && routeId !== "a" && (
+                  <button
+                    className="secondary-action"
+                    onClick={() => {
+                      select("a");
+                      setNotice("Switched to the recommended calmer Route A.");
+                      document
+                        .querySelector(".map-panel")
+                        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    }}
+                  >
+                    Switch to calmer route
+                  </button>
+                )}
+              </div>
+              <div className="navigation-landscape" aria-hidden="true">
+                <svg viewBox="0 0 260 150" role="presentation">
+                  <rect width="260" height="150" rx="18" fill="#dfeef7" />
+                  <circle cx="213" cy="31" r="14" fill="#f1d69a" />
+                  <path d="M0 84c39-29 76-29 113 2 40-25 91-25 147 2v62H0Z" fill="#b8d8c2" />
+                  <path d="M0 109c49-20 96-12 132 9 43-23 87-23 128-7v39H0Z" fill="#8fbea2" />
+                  <path d="M116 150c3-28 15-55 36-82 8 5 13 12 16 20-16 23-26 43-29 62Z" fill="#f7ecd1" />
+                  <g fill="#507f6b">
+                    <rect x="40" y="73" width="5" height="42" rx="2" />
+                    <circle cx="42" cy="67" r="17" />
+                    <rect x="205" y="77" width="5" height="41" rx="2" />
+                    <circle cx="207" cy="70" r="16" />
+                  </g>
+                  <path d="M145 55a13 13 0 0 1 26 0c0 9-13 22-13 22s-13-13-13-22Z" fill="#6d91b8" />
+                  <circle cx="158" cy="55" r="4" fill="#fff" />
+                  <path d="M22 31c8-9 20-8 26 0 7-5 17-1 18 7H16c0-4 2-6 6-7Z" fill="#fff" opacity=".78" />
+                </svg>
+              </div>
+            </motion.div>
+            <div className="navigation-quiet-strip">
+              <span className="navigation-quiet-icon" aria-hidden="true">☼</span>
+              <div><strong>Need a break later?</strong><span>Quiet break spots are shown below.</span></div>
+              <button
+                type="button"
+                onClick={() =>
+                  document
+                    .querySelector("#quiet-break-support")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" })
+                }
+              >
+                View quiet break spots →
+              </button>
+            </div>
           </article>
-          <article className="panel quiet-space-card">
-            <Heading over="Quiet break support" title="Need a quiet break?" />
+        </motion.section>
+        <motion.section
+          {...reveal}
+          className="panel live-data-panel"
+          id="data"
+          data-empty={!journey}
+        >
+          <div className="support-heading-row live">
+            <span className="support-heading-icon live" aria-hidden="true">
+              ◉
+            </span>
+            <div>
+              <Heading
+                over="Live data status"
+                title="What's happening right now"
+              />
+              <p>Live conditions from our sensor network</p>
+            </div>
+          </div>
+          <div className="live-status-grid">
+            <article className="live-status-card crowd-card">
+              <p className="live-card-label">Crowd areas</p>
+              <strong className="live-card-value">
+                {crowdData.length ? highCrowdCount : "—"}
+              </strong>
+              <p>{crowdData.length ? "High crowd areas" : crowdStatus}</p>
+              <div className="crowd-status-scale" aria-label="Crowd level scale">
+                <span>Low {lowCrowdCount}</span>
+                <span>Moderate {moderateCrowdCount}</span>
+                <span>High {highCrowdCount}</span>
+              </div>
+            </article>
+            <article className="live-status-card freshness-card">
+              <p className="live-card-label">Data status</p>
+              <strong className="live-card-value status-word">
+                {simplifiedDataStatus}
+              </strong>
+              <p>{simplifiedDataMessage}</p>
+              <div className="freshness-scale" aria-label="Sensor data states">
+                <span>Fresh {freshCount}</span>
+                <span>Stale {staleCount}</span>
+                <span>No data {noDataCount}</span>
+              </div>
+            </article>
+            <article className="live-status-card confidence-card">
+              <div className="confidence-icon" aria-hidden="true">✓</div>
+              <p className="live-card-label">Data confidence</p>
+              <div className="confidence-copy">
+                <span className="live-status-dot" aria-hidden="true" />
+                <span>
+                  <strong>{confidenceHeadline}</strong>
+                  <small>{confidenceDetail}</small>
+                  {typeof routeCrowdData?.score === "number" && (
+                    <small>Crowd score: {routeCrowdData.score.toFixed(2)}</small>
+                  )}
+                </span>
+              </div>
+            </article>
+          </div>
+          <div className="live-status-footer">
+            <span>
+              ↻ {crowdGeneratedAt ? `Last updated ${crowdGeneratedAt}` : "Live data status"}
+            </span>
+            <button
+              className="quiet-button"
+              onClick={() => {
+                setNotice("");
+                setCrowdRefresh((value) => value + 1);
+              }}
+            >
+              Refresh crowd conditions
+            </button>
+          </div>
+        </motion.section>
+        <motion.section
+          {...reveal}
+          className="panel quiet-space-card quiet-support-final"
+          id="quiet-break-support"
+          data-empty={!journey}
+        >
+          <div className="support-heading-row">
+            <span className="support-heading-icon quiet" aria-hidden="true">
+              ♧
+            </span>
+            <div>
+              <Heading over="Quiet break support" title="Need a quiet break?" />
+            </div>
+          </div>
+          <div className="quiet-place-grid">
             {quietBreakPlaces.map((place) => (
               <Place
                 name={place.name}
@@ -870,91 +1095,30 @@ export default function Home() {
                 key={place.id}
               />
             ))}
-          </article>
-        </motion.section>
-        <motion.section
-          {...reveal}
-          className="panel live-data-panel"
-          id="data"
-        >
-          <Heading over="Live data status" title="Current conditions" />
-          <div className="status-list">
-            <Status
-              warning={crowdData.some((point) => point.level === "high")}
-              title="Pedestrian density"
-              text={
-                crowdData.some((point) => point.level === "high")
-                  ? `${crowdData.filter((point) => point.level === "high").length} high-crowd sensor area${crowdData.filter((point) => point.level === "high").length === 1 ? "" : "s"}`
-                  : crowdData.length
-                    ? "No high-crowd sensor areas reported"
-                    : crowdStatus
-              }
-            />
-            <Status
-              warning={dataQualityStatus.startsWith("0 fresh")}
-              title="Sensor freshness"
-              text={dataQualityStatus}
-            />
-            <Status
-              calm
-              title="Data confidence"
-              text={notice || crowdStatus}
-            />
           </div>
-          <button
-            className="quiet-button"
-            onClick={() => {
-              setNotice("");
-              setCrowdRefresh((value) => value + 1);
-            }}
-          >
-            Refresh crowd conditions
-          </button>
+          {quietDataNeedsCaution && (
+            <p className="quiet-data-note">
+              These suggestions are based on general information and may not
+              reflect real-time crowd levels.
+            </p>
+          )}
         </motion.section>
       </main>
     </>
   );
 }
-function Status({
-  warning = false,
-  calm = false,
-  title,
-  text,
+function Place({
+  name,
+  detail,
 }: {
-  warning?: boolean;
-  calm?: boolean;
-  title: string;
-  text: string;
+  name: string;
+  detail: {
+    amenity: string;
+    crowd: string;
+    proximity: string | null;
+    isFresh: boolean;
+  };
 }) {
-  const reduce = useReducedMotion();
-  return (
-    <motion.article
-      whileHover={reduce ? undefined : { y: -2 }}
-      transition={{ duration: 0.18 }}
-    >
-      <motion.span
-        animate={reduce ? undefined : { scale: [1, 1.12, 1] }}
-        transition={{ duration: 0.35 }}
-        className={`status-dot ${warning ? "warning" : calm ? "calm" : "good"}`}
-      />
-      <div>
-        <h3>{title}</h3>
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.p
-            key={text}
-            initial={reduce ? false : { opacity: 0, y: 3 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduce ? undefined : { opacity: 0 }}
-            transition={{ duration: reduce ? 0 : 0.2 }}
-          >
-            {text}
-          </motion.p>
-        </AnimatePresence>
-      </div>
-    </motion.article>
-  );
-}
-function Place({ name, detail }: { name: string; detail: string }) {
   const reduce = useReducedMotion();
   return (
     <motion.div
@@ -962,8 +1126,13 @@ function Place({ name, detail }: { name: string; detail: string }) {
       whileHover={reduce ? undefined : { x: 3 }}
       transition={{ duration: 0.2, ease: "easeOut" }}
     >
+      <span className="quiet-place-icon" aria-hidden="true">♧</span>
       <h3>{name}</h3>
-      <p>{detail}</p>
+      <div className="quiet-place-tags">
+        <span>{detail.amenity}</span>
+        <span>{detail.crowd}</span>
+      </div>
+      {detail.proximity && <p>⌖ {detail.proximity}</p>}
     </motion.div>
   );
 }
