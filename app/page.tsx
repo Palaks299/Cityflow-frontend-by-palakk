@@ -229,26 +229,20 @@ export default function Home() {
     [routeOptionsPanelHeight, setRouteOptionsPanelHeight] = useState<
       number | null
     >(null),
-    [selectedPrefs, setPrefs] = useState<string[]>(prefs),
+    [selectedPrefs, setPrefs] = useState<string[]>([]),
     [from, setFrom] = useState(""),
     [to, setTo] = useState(""),
     [journey, setJourney] = useState<{
       origin: string;
       destination: string;
     } | null>(null),
-    [notice, setNotice] = useState(""),
+    [, setNotice] = useState(""),
     [crowdData, setCrowdData] = useState<CrowdDensityPoint[]>([]),
-    [crowdStatus, setCrowdStatus] = useState("Loading crowd conditions…"),
-    [crowdGeneratedAt, setCrowdGeneratedAt] = useState<string | null>(null),
-    [sensorTotal, setSensorTotal] = useState(0),
-    [dataQualityStatus, setDataQualityStatus] = useState(
-      "Checking sensor freshness…",
-    ),
+    [, setCrowdStatus] = useState("Loading crowd conditions…"),
     [calculatedRoutes, setCalculatedRoutes] =
       useState<CalculatedRouteMetrics | null>(null),
     [routingStatus, setRoutingStatus] = useState("Loading Google Maps…"),
-    [routeRequestId, setRouteRequestId] = useState(0),
-    [crowdRefresh, setCrowdRefresh] = useState(0);
+    [routeRequestId, setRouteRequestId] = useState(0);
   const routingIsActive = /loading|finding|locating|calculating|starting/i.test(
     routingStatus,
   );
@@ -304,53 +298,8 @@ export default function Home() {
       isFresh: nearest.dataStatus === "fresh",
     };
   };
-  const highCrowdCount = crowdData.filter(
-    (point) => point.level === "high",
-  ).length;
-  const moderateCrowdCount = crowdData.filter(
-    (point) => point.level === "moderate",
-  ).length;
-  const lowCrowdCount = crowdData.filter((point) => point.level === "low").length;
-  const freshnessCounts = dataQualityStatus.match(
-    /(\d+) fresh · (\d+) stale · (\d+) no data/,
-  );
-  const freshCount = Number(freshnessCounts?.[1] ?? 0);
-  const staleCount = Number(freshnessCounts?.[2] ?? 0);
-  const noDataCount = Number(freshnessCounts?.[3] ?? 0);
-  const simplifiedDataStatus = freshnessCounts
-    ? freshCount === 0 && (staleCount > 0 || noDataCount > 0)
-      ? "Limited"
-      : staleCount + noDataCount > freshCount
-        ? "Mixed"
-        : "Current"
-    : "Unavailable";
-  const simplifiedDataMessage = freshnessCounts
-    ? simplifiedDataStatus === "Limited"
-      ? "Some sensor readings may be outdated"
-      : simplifiedDataStatus === "Mixed"
-        ? "Fresh and older readings are available"
-        : "Most sensor readings are current"
-    : dataQualityStatus;
   const quietDataNeedsCaution =
     !crowdData.length || crowdData.some((point) => point.dataStatus !== "fresh");
-  const routeCrowdData = calculatedRoutes?.lowCrowdData;
-  const routeCoveragePercent =
-    typeof routeCrowdData?.coverageRatio === "number"
-      ? Math.round(
-          routeCrowdData.coverageRatio <= 1
-            ? routeCrowdData.coverageRatio * 100
-            : routeCrowdData.coverageRatio,
-        )
-      : null;
-  const confidenceHeadline = routeCrowdData?.status
-    ? routeCrowdData.status.replaceAll("_", " ")
-    : sensorTotal
-      ? `${crowdData.length} of ${sensorTotal} sensors reporting`
-      : "Unavailable";
-  const confidenceDetail =
-    routeCoveragePercent !== null
-      ? `${routeCoveragePercent}% crowd-data coverage on Route A`
-      : notice || crowdStatus;
   useEffect(() => {
     if (!journey) return;
     const controller = new AbortController();
@@ -402,50 +351,25 @@ export default function Home() {
                 })
               : undefined,
           })) satisfies CrowdDensityPoint[];
-        setSensorTotal((payload.conditions ?? []).length);
-        setCrowdGeneratedAt(
-          payload.generated_at
-            ? new Date(payload.generated_at).toLocaleString("en-AU", {
-                dateStyle: "medium",
-                timeStyle: "short",
-              })
-            : null,
-        );
         setCrowdData(points);
         setCrowdStatus(
           points.length
             ? `${points.length} sensor${points.length === 1 ? "" : "s"} updated`
             : "No crowd observations are currently available.",
         );
-        const allConditions = payload.conditions ?? [];
-        const fresh = allConditions.filter(
-          (item) => item.live_status === "fresh",
-        ).length;
-        const stale = allConditions.filter(
-          (item) => item.live_status === "stale",
-        ).length;
-        const noData = allConditions.filter(
-          (item) => item.live_status === "no_data",
-        ).length;
-        setDataQualityStatus(
-          `${fresh} fresh · ${stale} stale · ${noData} no data`,
-        );
       } catch (error) {
         if (controller.signal.aborted) return;
         setCrowdData([]);
-        setSensorTotal(0);
-        setCrowdGeneratedAt(null);
         setCrowdStatus(
           error instanceof Error
             ? error.message
             : "Crowd conditions are unavailable.",
         );
-        setDataQualityStatus("Sensor freshness is unavailable.");
       }
     }
     void loadCrowdConditions();
     return () => controller.abort();
-  }, [crowdRefresh, journey]);
+  }, [journey]);
   const select = (id: (typeof routes)[number]["id"]) => {
     setRouteId(id);
     setNotice("");
@@ -509,7 +433,6 @@ export default function Home() {
             transition={{ duration: 0.4 }}
           >
             <a href="#planner">Planner</a>
-            <a href="#data">Live data</a>
             <a href="#details">Route details</a>
             <a href="#navigation">Navigation</a>
           </motion.nav>
@@ -863,7 +786,14 @@ export default function Home() {
                   </div>
                   <p className="route-detail-summary">{route.summary}</p>
                   <div className="route-detail-features">
-                    {route.scores.map((score, index) => (
+                    {route.scores
+                      .filter(
+                        (score) =>
+                          route.id !== "a" ||
+                          (score[0] !== "Fewer construction points" &&
+                            score[0] !== "More open-space nearby"),
+                      )
+                      .map((score, index) => (
                       <article key={score[0]}>
                         <span className="score-index">{index + 1}</span>
                         <div>
@@ -999,79 +929,6 @@ export default function Home() {
               </button>
             </div>
           </article>
-        </motion.section>
-        <motion.section
-          {...reveal}
-          className="panel live-data-panel"
-          id="data"
-          data-empty={!journey}
-        >
-          <div className="support-heading-row live">
-            <span className="support-heading-icon live" aria-hidden="true">
-              ◉
-            </span>
-            <div>
-              <Heading
-                over="Live data status"
-                title="What's happening right now"
-              />
-              <p>Live conditions from our sensor network</p>
-            </div>
-          </div>
-          <div className="live-status-grid">
-            <article className="live-status-card crowd-card">
-              <p className="live-card-label">Crowd areas</p>
-              <strong className="live-card-value">
-                {crowdData.length ? highCrowdCount : "—"}
-              </strong>
-              <p>{crowdData.length ? "High crowd areas" : crowdStatus}</p>
-              <div className="crowd-status-scale" aria-label="Crowd level scale">
-                <span>Low {lowCrowdCount}</span>
-                <span>Moderate {moderateCrowdCount}</span>
-                <span>High {highCrowdCount}</span>
-              </div>
-            </article>
-            <article className="live-status-card freshness-card">
-              <p className="live-card-label">Data status</p>
-              <strong className="live-card-value status-word">
-                {simplifiedDataStatus}
-              </strong>
-              <p>{simplifiedDataMessage}</p>
-              <div className="freshness-scale" aria-label="Sensor data states">
-                <span>Fresh {freshCount}</span>
-                <span>Stale {staleCount}</span>
-                <span>No data {noDataCount}</span>
-              </div>
-            </article>
-            <article className="live-status-card confidence-card">
-              <div className="confidence-icon" aria-hidden="true">✓</div>
-              <p className="live-card-label">Data confidence</p>
-              <div className="confidence-copy">
-                <span className="live-status-dot" aria-hidden="true" />
-                <span>
-                  <strong>{confidenceHeadline}</strong>
-                  <small>{confidenceDetail}</small>
-                  {typeof routeCrowdData?.score === "number" && (
-                    <small>Crowd score: {routeCrowdData.score.toFixed(2)}</small>
-                  )}
-                </span>
-              </div>
-            </article>
-          </div>
-          <div className="live-status-footer">
-            <span>
-              ↻ {crowdGeneratedAt ? `Last updated ${crowdGeneratedAt}` : "Live data status"}
-            </span>
-            <button
-              className="quiet-button"
-              onClick={() => {
-                setNotice("");
-                setCrowdRefresh((value) => value + 1);
-              }}
-            >
-              Refresh crowd conditions
-            </button>
-          </div>
         </motion.section>
         <motion.section
           {...reveal}

@@ -25,17 +25,6 @@ type RouteResult = {
   durationMillis?: number;
   legs?: { steps?: { instructions?: string; distanceMeters?: number }[] }[];
 };
-type PositionMarker = {
-  map: MapInstance | null;
-  position: { lat: number; lng: number };
-};
-type MarkerLibrary = {
-  AdvancedMarkerElement: new (options: {
-    map: MapInstance;
-    position: { lat: number; lng: number };
-    title: string;
-  }) => PositionMarker;
-};
 type MapsLibrary = {
   Map: new (
     element: HTMLElement,
@@ -337,14 +326,11 @@ export default function GoogleRouteMap({
     lines = useRef<RouteLine[]>([]),
     routeMetricsHandler = useRef(onRoutesCalculated),
     routingStatusHandler = useRef(onRoutingStatus),
-    watchId = useRef<number | null>(null),
-    positionMarker = useRef<PositionMarker | null>(null),
     layerCircles = useRef<CircleInstance[]>([]),
     layerListeners = useRef<MapListener[]>([]),
     sensoryRouteRef = useRef(true),
     selectedRouteRef = useRef(selectedRouteId);
-  const [navigating, setNavigating] = useState(false),
-    [instruction, setInstruction] = useState(
+  const [instruction, setInstruction] = useState(
       "Route ready — start navigation when you are at the starting point.",
     );
   const [status, setStatus] = useState(
@@ -855,69 +841,6 @@ export default function GoogleRouteMap({
       layerCircles.current.forEach((item) => item.setMap(null));
     };
   }, [mapReady, crowdHeatMap, crowdData]);
-  useEffect(
-    () => () => {
-      if (watchId.current !== null)
-        navigator.geolocation.clearWatch(watchId.current);
-      if (positionMarker.current) positionMarker.current.map = null;
-    },
-    [],
-  );
-  async function startNavigation() {
-    if (!navigator.geolocation) {
-      setStatus("This browser does not support live location.");
-      return;
-    }
-    setStatus("Waiting for location permission…");
-    const googleMaps = await loadGoogleMaps();
-    const { AdvancedMarkerElement } = (await googleMaps.importLibrary(
-      "marker",
-    )) as MarkerLibrary;
-    watchId.current = navigator.geolocation.watchPosition(
-      (position) => {
-        const point = {
-          lat: position.coords.latitude,
-          lng: position.coords.longitude,
-        };
-        if (map.current) {
-          if (positionMarker.current) {
-            positionMarker.current.position = point;
-          } else {
-            positionMarker.current = new AdvancedMarkerElement({
-              map: map.current,
-              position: point,
-              title: "Your live location",
-            });
-          }
-        }
-        setNavigating(true);
-        setStatus(
-          `GPS active · accuracy ${Math.round(position.coords.accuracy)} m`,
-        );
-      },
-      (error) => {
-        setNavigating(false);
-        setStatus(
-          error.code === 1
-            ? "Location permission was denied."
-            : "Your live location is unavailable.",
-        );
-      },
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 },
-    );
-  }
-  function stopNavigation() {
-    if (watchId.current !== null) {
-      navigator.geolocation.clearWatch(watchId.current);
-      watchId.current = null;
-    }
-    if (positionMarker.current) {
-      positionMarker.current.map = null;
-      positionMarker.current = null;
-    }
-    setNavigating(false);
-    setStatus("Navigation stopped.");
-  }
   if (!key)
     return (
       <div className="map-visual map-setup">
@@ -970,19 +893,11 @@ export default function GoogleRouteMap({
         animate={{ opacity: 1, y: 0 }}
         className="navigation-overlay"
       >
-        <motion.span
-          animate={
-            navigating && !reduceMotion ? { scale: [1, 1.06, 1] } : undefined
-          }
-          transition={{ duration: 2, repeat: Infinity }}
-          className="turn-icon"
-        >
+        <span className="turn-icon">
           ↑
-        </motion.span>
+        </span>
         <div>
-          <small>
-            {navigating ? "LIVE WALKING NAVIGATION" : "NEXT DIRECTION"}
-          </small>
+          <small>NEXT DIRECTION</small>
           <AnimatePresence mode="wait" initial={false}>
             <motion.strong
               key={instruction}
@@ -995,31 +910,6 @@ export default function GoogleRouteMap({
             </motion.strong>
           </AnimatePresence>
           <div className="navigation-actions">
-            <AnimatePresence mode="wait" initial={false}>
-              {navigating ? (
-                <motion.button
-                  key="stop"
-                  initial={reduceMotion ? false : { opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-                  onClick={stopNavigation}
-                >
-                  Stop navigation
-                </motion.button>
-              ) : (
-                <motion.button
-                  key="start"
-                  initial={reduceMotion ? false : { opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  whileTap={reduceMotion ? undefined : { scale: 0.96 }}
-                  onClick={() => void startNavigation()}
-                >
-                  Start live navigation
-                </motion.button>
-              )}
-            </AnimatePresence>
             <motion.a
               whileHover={reduceMotion ? undefined : { y: -1 }}
               whileTap={reduceMotion ? undefined : { scale: 0.97 }}
