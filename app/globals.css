@@ -570,7 +570,11 @@ body{background:linear-gradient(145deg,#f8fcfc 0%,#e8f3f3 48%,#f2f8f8 100%)}
 [data-empty="true"]> :not(.section-heading):not(.support-heading-row):not(.navigation-panel-header){display:none!important}
 [data-empty="true"]::after{
   content:"Select a start and destination in the planner to view this information.";
+  position:static;
   display:grid;
+  width:100%;
+  box-sizing:border-box;
+  flex:0 0 auto;
   min-height:150px;
   place-items:center;
   padding:24px;
@@ -718,13 +722,16 @@ body{background:linear-gradient(145deg,#f8fcfc 0%,#e8f3f3 48%,#f2f8f8 100%)}
 
 /* Compact map direction overlay. */
 .google-map-shell .navigation-overlay{
-  width:min(365px,calc(100% - 24px));
-  gap:10px;
-  padding:10px 12px;
-  border-radius:11px;
+  width:min(285px,calc(100% - 20px));
+  gap:8px;
+  padding:7px 9px;
+  border-radius:9px;
 }
-.google-map-shell .turn-icon{flex-basis:34px;width:34px;height:34px;border-radius:9px;font-size:1.2rem}
-.google-map-shell .navigation-overlay small{margin-bottom:1px;font-size:.58rem}
-.google-map-shell .navigation-overlay strong{font-size:.79rem;line-height:1.25}
-.google-map-shell .navigation-actions{margin-top:6px}
-.google-map-shell .navigation-actions a{min-height:27px;padding:0 9px;font-size:.65rem}
+.google-map-shell .turn-icon{flex-basis:28px;width:28px;height:28px;border-radius:7px;font-size:1rem}
+.google-map-shell .navigation-overlay small{margin-bottom:0;font-size:.52rem}
+.google-map-shell .navigation-overlay strong{font-size:.69rem;line-height:1.18}
+.google-map-shell .navigation-actions{margin-top:4px}
+.google-map-shell .navigation-actions a{min-height:24px;padding:0 7px;font-size:.58rem}
+@media(max-width:680px){
+  .google-map-shell .navigation-overlay{width:min(255px,calc(100% - 16px));padding:6px 8px}
+}
